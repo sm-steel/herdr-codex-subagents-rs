@@ -1,4 +1,13 @@
-# Project instructions
+# Agent instructions
+
+## Installing for a user
+
+If the user says "install this" with this repository URL, follow [INSTALL.md](INSTALL.md).
+Use the released user installer and verify the result. Do not start the development
+or pure-core test-approval workflow for installation. Codex hook trust remains the
+user's normal review step.
+
+## Project development
 
 Read [docs/design.md](docs/design.md), [docs/rust-rules.md](docs/rust-rules.md), and
 the task in [docs/plan.md](docs/plan.md) before implementation.

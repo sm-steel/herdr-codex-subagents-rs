@@ -1,0 +1,37 @@
+name: Build review artifacts
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  binary:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build
+        run: cargo build --release --locked
+      - name: Stage plugin
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package/target/release -Force | Out-Null
+          Copy-Item herdr-plugin.toml, README.md, LICENSE-MIT, LICENSE-APACHE package
+          if ($IsWindows) {
+            Copy-Item target/release/herdr-codex-subagents-rs.exe package/target/release
+          } else {
+            Copy-Item target/release/herdr-codex-subagents-rs package/target/release
+          }
+          Get-ChildItem package/target/release -File | Get-FileHash -Algorithm SHA256 |
+            Select-Object Hash, @{ Name = 'File'; Expression = { Split-Path $_.Path -Leaf } } |
+            ConvertTo-Json | Set-Content package/checksums.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: codex-subagents-${{ matrix.os }}
+          path: package/
+          retention-days: 7

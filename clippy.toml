@@ -1,0 +1,18 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-print-in-tests = true
+max-fn-params-bools = 0
+cognitive-complexity-threshold = 25
+excessive-nesting-threshold = 5
+disallowed-methods = [
+  { path = "std::env::var", reason = "only the CLI environment snapshot reads ambient environment" },
+  { path = "std::env::var_os", reason = "only the CLI environment snapshot reads ambient environment" },
+  { path = "std::env::vars", reason = "only the CLI environment snapshot reads ambient environment" },
+  { path = "std::env::vars_os", reason = "only the CLI environment snapshot reads ambient environment" },
+  { path = "std::process::Command::new", reason = "only the Herdr process adapter starts child processes" },
+  { path = "std::io::stdout", reason = "only CLI output and terminal rendering own stdout" },
+  { path = "std::io::stderr", reason = "only CLI diagnostics own stderr" },
+  { path = "std::env::temp_dir", reason = "tests use private temporary directories" },
+]

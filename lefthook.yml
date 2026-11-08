@@ -1,0 +1,12 @@
+pre-commit:
+  commands:
+    format:
+      run: cargo fmt --check
+    whitespace:
+      run: git diff --cached --check
+pre-push:
+  commands:
+    clippy:
+      run: cargo clippy --locked --all-targets -- -D warnings
+    tests:
+      run: cargo nextest run --locked

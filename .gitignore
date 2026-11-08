@@ -7,3 +7,11 @@
 .env
 .env.*
 !.env.example
+
+/.superpowers/
+
+# Local maintainer tooling and release output
+__pycache__/
+.ruff_cache/
+/dist/
+/package/

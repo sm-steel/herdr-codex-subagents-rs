@@ -1,41 +1,75 @@
-# Herdr Codex Subagents (Rust)
+<h1 align="center">Codex Subagents</h1>
 
-A planned Windows and Linux Herdr plugin: one compact panel containing the main
-Codex thread followed by its subagents. Click a row to inspect that thread in the
-existing Codex pane. Each row shows status, assignment, and latest observable activity.
+<p align="center">
+  <b>See what your Codex agents are doing, without leaving Herdr.</b>
+</p>
 
-**Status: design and navigation proof of concept; no installable plugin yet.**
+<p align="center">
+  <a href="https://github.com/sm-steel/herdr-codex-subagents-rs/actions/workflows/ci.yml"><img src="https://github.com/sm-steel/herdr-codex-subagents-rs/actions/workflows/ci.yml/badge.svg?branch=main" alt="Checks"></a>
+  <a href="https://github.com/sm-steel/herdr-codex-subagents-rs/actions/workflows/release.yml"><img src="https://img.shields.io/badge/Windows%20%7C%20Linux-89b4fa?label=platforms" alt="Windows and Linux"></a>
+  <br>
+  📖 <a href="docs/usage.md">Guide</a> ·
+  📦 <a href="docs/install.md">Installation</a> ·
+  🤖 <a href="INSTALL.md">For agents</a>
+</p>
 
-- [Design](docs/design.md): behavior, architecture, constraints, acceptance criteria.
-- [Implementation plan](docs/plan.md): sequenced tasks and verification.
-- [Research](docs/research.md): primary sources and compatibility findings.
-- [PoC results](poc/RESULTS.md): tested capabilities and limitations.
-- [Rust rules](docs/rust-rules.md): conventions adapted from semoxide.
-- [Rule migration](docs/rule-migration.md): retained, adapted, and omitted policies.
+<p align="center">
+  <img src="docs/assets/agent-tree.png" alt="The same Codex agent tree expanded and folded, with working indicators and a descendant counter" width="760">
+  <br>
+  <sub>Real panel rendering, synthetic demo sessions.</sub>
+</p>
 
-The monitor will not call model APIs, require an API key, submit prompts, start
-additional Codex agents, or stop existing agents. Thread selection is an explicit
-terminal-navigation action. Agent text is sensitive local data and is not telemetry.
+## How it works
 
-## Navigation spike
+The plugin opens a small panel beside Codex and follows its local session logs.
+Main stays at the top; delegated agents form a tree underneath. Expand a branch
+to see its children, task and latest activity. Your original Codex TUI stays in
+its own pane.
 
-The dependency-free spike invokes Herdr's portable CLI and waits for a redraw.
-It is a throwaway transport check, not the plugin or a reliable thread selector.
+## Features
 
-```powershell
-rustc --edition 2024 poc/navigation.rs -o poc/navigation.exe
-./poc/navigation.exe <herdr-executable> <isolated-session> <pane-id> next
-./poc/navigation.exe <herdr-executable> <isolated-session> <pane-id> previous
+- 🌳 **One tree** for Main, subagents and nested work
+- ⣿ **Live indicators** that animate while an agent or its descendants work
+- 🕒 **Working first, then last active**, with a working/total counter
+- ⌨️ **Keyboard and mouse** to select, expand and fold branches
+- 🎨 **Catppuccin Mocha**, a compact 36-column panel and no focus stealing
+- 🔒 **Local and read-only**: no API keys, model calls or telemetry
+
+## Install
+
+You need [Herdr 0.9.5+](https://herdr.dev/) and Codex. The default installer uses
+a prebuilt binary; Rust and Git are unnecessary.
+
+**Linux — Ubuntu or Arch, x86-64**
+
+```sh
+curl -fsSL https://github.com/sm-steel/herdr-codex-subagents-rs/releases/latest/download/install.sh | sh
 ```
 
-Run only against a dedicated test pane. Shortcuts can be consumed by drafts or
-popups. The production implementation must verify identity and preconditions.
+**Windows — x86-64**
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/sm-steel/herdr-codex-subagents-rs/releases/latest/download/install.ps1 | iex"
+```
+
+Review the hook once in Codex `/hooks`. Later sessions attach automatically.
+[Installation](docs/install.md) covers source builds and updates.
+You can also ask your agent: “Install this for me:
+https://github.com/sm-steel/herdr-codex-subagents-rs”.
 
 ## Development
 
-Implementation begins after design review. The intended stack is Rust 2024,
-Ratatui/Crossterm, serde, and Herdr's CLI. Rust binaries and real Windows/Linux CI
-are required; Bash, PowerShell scripts, Python, and native Unix sockets must not
-be runtime prerequisites. The initial repository contains no Cargo product skeleton.
+You need Rust 1.99.0 and [mise](https://mise.jdx.dev/).
 
-Independent project; not affiliated with OpenAI or Herdr.
+```sh
+mise install
+mise run check
+```
+
+See the [design](docs/design.md), [Rust conventions](docs/rust-rules.md) and
+[platform checks](docs/compatibility.md). Versions and releases use
+[Cocogitto through mise tasks](docs/packaging.md).
+
+## License
+
+[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE).

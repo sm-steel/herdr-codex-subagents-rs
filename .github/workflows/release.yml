@@ -1,0 +1,123 @@
+name: Release bundles
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary: herdr-codex-subagents-rs
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: herdr-codex-subagents-rs.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - name: Install Rust
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup toolchain install 1.99.0 --profile minimal --target "$TARGET"
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.13.7"
+          enable-cache: false
+      - name: Python checks
+        run: |
+          uvx --from ruff==0.17.4 ruff check scripts tests/installer tests/release
+          uvx --from ruff==0.17.4 ruff format --check scripts tests/installer tests/release
+          uvx --from ty==0.0.99 ty check scripts
+      - name: Release fixtures
+        run: uv run --no-project tests/release/test_release.py
+      - name: Offline installer fixtures
+        run: uv run --no-project tests/installer/test_installers.py
+      - name: Build
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [ "$TARGET" = x86_64-pc-windows-msvc ]; then
+            export RUSTFLAGS='-C target-feature=+crt-static'
+          fi
+          cargo +1.99.0 build --release --locked --target "$TARGET"
+      - name: Stage runtime bundle
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BINARY: ${{ matrix.binary }}
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: uv run --no-project scripts/package_release.py --target "$TARGET" --binary-path "target/$TARGET/release/$BINARY" --output-directory dist
+      - name: Native Windows smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Expand-Archive dist/*.zip -DestinationPath "$env:RUNNER_TEMP/release-smoke"
+          & "$env:RUNNER_TEMP/release-smoke/bin/herdr-codex-subagents-rs.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'Windows binary smoke failed' }
+      - name: Ubuntu and Arch runtime smoke
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_dir="$RUNNER_TEMP/release-smoke"
+          mkdir -p "$smoke_dir/bundle" "$smoke_dir/home" "$smoke_dir/codex/sessions"
+          tar -xzf dist/*.tar.gz -C "$smoke_dir/bundle"
+          for image in ubuntu:22.04 ubuntu:24.04 archlinux:base; do
+            docker run --rm --network none --mount "type=bind,source=$smoke_dir,target=/smoke" -e HOME=/smoke/home -e CODEX_HOME=/smoke/codex "$image" /bin/sh -ec '
+              /smoke/bundle/bin/herdr-codex-subagents-rs --version
+              result=$(/smoke/bundle/bin/herdr-codex-subagents-rs doctor)
+              printf "%s\n" "$result" | grep -F "\"sessions_directory_available\":true"
+            '
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist/*
+            install.sh
+            install.ps1
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download tested bundles and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh run download "$RUN_ID" --pattern 'release-*' --dir downloaded
+          mkdir release
+          cp downloaded/*/dist/*.tar.gz downloaded/*/dist/*.zip release/
+          cat downloaded/*/dist/SHA256SUMS | LC_ALL=C sort -k2 > release/SHA256SUMS
+          test "$(wc -l < release/SHA256SUMS)" -eq 2
+          cp downloaded/release-x86_64-unknown-linux-musl/install.sh release/
+          cp downloaded/release-x86_64-pc-windows-msvc/install.ps1 release/
+          (cd release && sha256sum install.sh install.ps1 >> SHA256SUMS)
+          (cd release && sha256sum --check SHA256SUMS)
+          awk -v tag="$RELEASE_TAG" '{sub(/\r$/, "")} /^## / {if (active) exit; if (index($0, "[" tag "]")) active=1} active && /^- - -$/ {exit} active {print}' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+          gh release create "$RELEASE_TAG" release/* --verify-tag --title "$RELEASE_TAG" --notes-file release-notes.md

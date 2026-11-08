@@ -1,0 +1,49 @@
+id = "sm-steel.codex-subagents"
+name = "Codex Subagents"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Read-only Codex main and subagent status panel"
+platforms = ["windows", "linux"]
+
+[[build]]
+command = ["cargo", "build", "--release", "--locked"]
+
+[[actions]]
+id = "open"
+title = "Show Codex subagents"
+contexts = ["pane"]
+command = ["target/release/herdr-codex-subagents-rs", "sync"]
+
+[[panes]]
+id = "monitor"
+title = "Codex agents"
+placement = "split"
+command = ["target/release/herdr-codex-subagents-rs", "watch"]
+
+[[startup]]
+command = ["target/release/herdr-codex-subagents-rs", "sync"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["target/release/herdr-codex-subagents-rs", "sync"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["target/release/herdr-codex-subagents-rs", "sync"]
+
+[[events]]
+on = "pane.moved"
+command = ["target/release/herdr-codex-subagents-rs", "sync"]
+
+[[actions]]
+id = "sync"
+title = "Attach Codex monitors automatically"
+command = ["target/release/herdr-codex-subagents-rs", "sync"]
+
+[[startup]]
+command = ["target/release/herdr-codex-subagents-rs", "setup"]
+
+[[actions]]
+id = "setup"
+title = "Configure automatic Codex panels"
+command = ["target/release/herdr-codex-subagents-rs", "setup"]
