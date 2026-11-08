@@ -1,4 +1,4 @@
-//! Bounded JSONL framing contract; implementation awaits test review.
+//! Bounded byte framing for incrementally appended JSONL records.
 
 /// A complete record or a diagnostic for a discarded oversized record.
 #[derive(Debug, PartialEq, Eq)]
@@ -10,28 +10,63 @@ pub enum Record {
 }
 
 /// Incremental byte framing; decoding happens only after an entire line arrives.
-pub struct RecordBuffer;
+pub struct RecordBuffer {
+    bytes: Vec<u8>,
+    limit: usize,
+    discarding: bool,
+}
 
 impl RecordBuffer {
     /// Construct a framer with a maximum record byte length.
     #[must_use]
-    pub const fn new(_max_record_bytes: usize) -> Self {
-        Self
+    pub const fn new(max_record_bytes: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit: max_record_bytes,
+            discarding: false,
+        }
     }
 
     /// Feed new bytes, retaining a partial line between calls.
     #[must_use]
-    pub fn push(&mut self, _bytes: &[u8]) -> Vec<Record> {
-        Vec::new()
+    pub fn push(&mut self, bytes: &[u8]) -> Vec<Record> {
+        let mut records = Vec::new();
+        for &byte in bytes {
+            if byte == b'\n' {
+                if self.discarding {
+                    self.discarding = false;
+                    continue;
+                }
+                if self.bytes.last() == Some(&b'\r') {
+                    self.bytes.pop();
+                }
+                records.push(Record::Line(std::mem::take(&mut self.bytes)));
+                continue;
+            }
+            if self.discarding {
+                continue;
+            }
+            if self.bytes.len() == self.limit {
+                self.bytes.clear();
+                self.discarding = true;
+                records.push(Record::Oversized);
+                continue;
+            }
+            self.bytes.push(byte);
+        }
+        records
     }
 
     /// Forget an incomplete record after file truncation or replacement.
-    pub fn reset(&mut self) {}
+    pub fn reset(&mut self) {
+        self.bytes.clear();
+        self.discarding = false;
+    }
 
     /// Current retained bytes, bounded by the configured limit.
     #[must_use]
     pub const fn buffered_bytes(&self) -> usize {
-        0
+        self.bytes.len()
     }
 }
 
@@ -49,7 +84,7 @@ mod tests {
     #[test]
     fn retains_partial_records_until_newline() {
         let mut buffer = RecordBuffer::new(100);
-        assert!(buffer.push(b"partial").is_empty());
+        assert_eq!(buffer.push(b"partial"), Vec::<Record>::new());
         assert_eq!(buffer.buffered_bytes(), 7);
         assert_eq!(
             buffer.push(b" end\n"),
@@ -62,7 +97,7 @@ mod tests {
         let bytes = "{\"text\":\"Привет 🦀\"}\n".as_bytes();
         for boundary in 0..bytes.len() {
             let mut buffer = RecordBuffer::new(100);
-            assert!(buffer.push(&bytes[..boundary]).is_empty());
+            assert_eq!(buffer.push(&bytes[..boundary]), Vec::<Record>::new());
             assert_eq!(
                 buffer.push(&bytes[boundary..]),
                 vec![Record::Line(bytes[..bytes.len() - 1].to_vec())]
@@ -93,7 +128,7 @@ mod tests {
     #[test]
     fn fragmented_oversize_generates_only_one_diagnostic() {
         let mut buffer = RecordBuffer::new(4);
-        assert!(buffer.push(b"1234").is_empty());
+        assert_eq!(buffer.push(b"1234"), Vec::<Record>::new());
         let mut events = buffer.push(b"5678");
         events.extend(buffer.push(b"90\nok\n"));
         assert_eq!(
@@ -115,7 +150,7 @@ mod tests {
     #[test]
     fn reset_prevents_joining_old_and_replaced_file_contents() {
         let mut buffer = RecordBuffer::new(100);
-        assert!(buffer.push(b"old-").is_empty());
+        assert_eq!(buffer.push(b"old-"), Vec::<Record>::new());
         buffer.reset();
         assert_eq!(buffer.push(b"new\n"), vec![Record::Line(b"new".to_vec())]);
     }
@@ -129,6 +164,6 @@ mod tests {
     #[test]
     fn unterminated_tail_is_not_a_complete_record() {
         let mut buffer = RecordBuffer::new(100);
-        assert!(buffer.push(b"{\"partial\":true}").is_empty());
+        assert_eq!(buffer.push(b"{\"partial\":true}"), Vec::<Record>::new());
     }
 }

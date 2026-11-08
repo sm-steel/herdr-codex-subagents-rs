@@ -1,8 +1,28 @@
-//! Agent-tree and lifecycle contract; reducer implementation awaits test review.
+//! Deterministic agent ancestry and explicit lifecycle observations.
+
+use std::collections::BTreeMap;
+
+const MAX_AGENTS: usize = 1_000;
+const MAX_ACTIVITIES: usize = 200;
+const MAX_TEXT_BYTES: usize = 4_096;
 
 /// An exact upstream thread identifier, independent of its display name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ThreadId(String);
+
+impl ThreadId {
+    /// Wrap an identifier obtained from an upstream identity field.
+    #[must_use]
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Exact upstream identifier, never a display name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Observed lifecycle state; silence is never a terminal event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,57 +110,251 @@ pub struct AgentRow {
     activity_count: usize,
 }
 
+impl AgentRow {
+    /// Exact thread identity.
+    #[must_use]
+    pub const fn thread(&self) -> &ThreadId {
+        &self.thread
+    }
+    /// Indentation level from the root.
+    #[must_use]
+    pub const fn depth(&self) -> usize {
+        self.depth
+    }
+    /// Last explicitly observed lifecycle state.
+    #[must_use]
+    pub const fn status(&self) -> Status {
+        self.status
+    }
+    /// Availability of the observation source.
+    #[must_use]
+    pub const fn freshness(&self) -> Freshness {
+        self.freshness
+    }
+    /// Display name, never used as identity.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// Recorded delegated task if available.
+    #[must_use]
+    pub fn assignment(&self) -> Option<&str> {
+        self.assignment.as_deref()
+    }
+    /// Most recently observed activity if available.
+    #[must_use]
+    pub fn activity(&self) -> Option<&str> {
+        self.activity.as_deref()
+    }
+    /// Number of retained distinct activities, bounded by the retention limit.
+    #[must_use]
+    pub const fn activity_count(&self) -> usize {
+        self.activity_count
+    }
+}
+
 /// Invalid ancestry cannot enter the tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidAncestry;
 
-/// Domain state. This stub intentionally ignores events until tests are approved.
+/// Domain state; all I/O and time remain in adapters.
 pub struct AgentTree {
     root: ThreadId,
+    nodes: BTreeMap<ThreadId, Node>,
+    order: Vec<ThreadId>,
+}
+
+struct Node {
+    row: AgentRow,
+    parent: Option<ThreadId>,
+    turn: Option<String>,
+    activities: Vec<(String, String)>,
+}
+
+impl Node {
+    fn new(thread: ThreadId, name: String) -> Self {
+        Self {
+            row: AgentRow {
+                thread,
+                depth: 0,
+                status: Status::Unknown,
+                freshness: Freshness::Fresh,
+                name,
+                assignment: None,
+                activity: None,
+                activity_count: 0,
+            },
+            parent: None,
+            turn: None,
+            activities: Vec::new(),
+        }
+    }
 }
 
 impl AgentTree {
     /// Construct a tree rooted at an exact session ID.
     #[must_use]
-    pub const fn new(root: ThreadId) -> Self {
-        Self { root }
+    pub fn new(root: ThreadId) -> Self {
+        let node = Node::new(root.clone(), "Main".into());
+        Self {
+            nodes: BTreeMap::from([(root.clone(), node)]),
+            order: vec![root.clone()],
+            root,
+        }
     }
 
     /// Apply one observation.
     ///
     /// # Errors
     /// Returns an error for cycles, self-parenting, and attempts to reparent root.
-    pub fn apply(&mut self, _event: Event) -> Result<(), InvalidAncestry> {
+    pub fn apply(&mut self, event: Event) -> Result<(), InvalidAncestry> {
+        match event {
+            Event::Discover {
+                thread,
+                parent,
+                name,
+                assignment,
+            } => {
+                self.check_ancestry(&thread, &parent)?;
+                if let Some(node) = self.ensure(&thread) {
+                    node.parent = Some(parent);
+                    if let Some(name) = name {
+                        node.row.name = bounded_text(&name);
+                    }
+                    if let Some(assignment) = assignment {
+                        node.row.assignment = Some(bounded_text(&assignment));
+                    }
+                }
+            }
+            Event::Lifecycle {
+                thread,
+                turn,
+                status,
+            } => {
+                if let Some(node) = self.ensure(&thread)
+                    && (status == Status::Working
+                        || node.turn.as_ref().is_none_or(|active| active == &turn))
+                {
+                    node.turn = Some(turn);
+                    node.row.status = status;
+                }
+            }
+            Event::Activity {
+                thread,
+                event_id,
+                text,
+            } => {
+                if let Some(node) = self.ensure(&thread)
+                    && !node.activities.iter().any(|(seen, _)| seen == &event_id)
+                {
+                    let text = bounded_text(&text);
+                    node.activities.push((event_id, text.clone()));
+                    if node.activities.len() > MAX_ACTIVITIES {
+                        node.activities.remove(0);
+                    }
+                    node.row.activity = Some(text);
+                    node.row.activity_count = node.activities.len();
+                }
+            }
+            Event::Source { thread, freshness } => {
+                if let Some(node) = self.ensure(&thread) {
+                    node.row.freshness = freshness;
+                }
+            }
+        }
         Ok(())
     }
 
     /// Return main first, then known descendants in stable ancestry order.
     #[must_use]
     pub fn rows(&self) -> Vec<AgentRow> {
-        vec![AgentRow {
-            thread: self.root.clone(),
-            depth: 0,
-            status: Status::Unknown,
-            freshness: Freshness::Fresh,
-            name: "Main".into(),
-            assignment: None,
-            activity: None,
-            activity_count: 0,
-        }]
+        let mut rows = Vec::new();
+        self.append_rows(&self.root, 0, &mut rows);
+        rows
     }
 
     /// Number of working descendants, independent of the root's own status.
     #[must_use]
-    pub const fn working_descendants(&self) -> usize {
-        0
+    pub fn working_descendants(&self) -> usize {
+        self.rows()
+            .iter()
+            .skip(1)
+            .filter(|row| row.status == Status::Working)
+            .count()
     }
+
+    fn ensure(&mut self, thread: &ThreadId) -> Option<&mut Node> {
+        if !self.nodes.contains_key(thread) {
+            if self.nodes.len() >= MAX_AGENTS {
+                return None;
+            }
+            self.order.push(thread.clone());
+            self.nodes.insert(
+                thread.clone(),
+                Node::new(thread.clone(), thread.as_str().into()),
+            );
+        }
+        self.nodes.get_mut(thread)
+    }
+
+    fn check_ancestry(&self, thread: &ThreadId, parent: &ThreadId) -> Result<(), InvalidAncestry> {
+        if thread == &self.root || thread == parent {
+            return Err(InvalidAncestry);
+        }
+        let mut cursor = Some(parent);
+        while let Some(current) = cursor {
+            if current == thread {
+                return Err(InvalidAncestry);
+            }
+            cursor = self
+                .nodes
+                .get(current)
+                .and_then(|node| node.parent.as_ref());
+        }
+        Ok(())
+    }
+
+    fn append_rows(&self, thread: &ThreadId, depth: usize, rows: &mut Vec<AgentRow>) {
+        let Some(node) = self.nodes.get(thread) else {
+            return;
+        };
+        let mut row = node.row.clone();
+        row.depth = depth;
+        rows.push(row);
+        for child in &self.order {
+            if self
+                .nodes
+                .get(child)
+                .is_some_and(|node| node.parent.as_ref() == Some(thread))
+            {
+                self.append_rows(child, depth + 1, rows);
+            }
+        }
+    }
+}
+
+fn bounded_text(text: &str) -> String {
+    let mut end = text.len().min(MAX_TEXT_BYTES);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.get(..end).unwrap_or_default().into()
 }
 
 impl Status {
     /// Text-mode status marker; color and animation are optional enhancements.
     #[must_use]
     pub const fn marker(self) -> &'static str {
-        "? unknown"
+        match self {
+            Self::Unknown => "? unknown",
+            Self::Working => "* working",
+            Self::Waiting => "~ waiting",
+            Self::Idle => "- idle",
+            Self::Completed => "+ completed",
+            Self::Failed => "! failed",
+            Self::Interrupted => "! interrupted",
+            Self::Closed => "x closed",
+        }
     }
 }
 
