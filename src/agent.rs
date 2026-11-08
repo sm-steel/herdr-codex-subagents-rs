@@ -95,6 +95,13 @@ pub enum Event {
         /// New source freshness.
         freshness: Freshness,
     },
+    /// A user task or delegated assignment observed for this thread.
+    Assignment {
+        /// Exact thread identity.
+        thread: ThreadId,
+        /// Recorded task text, separate from activity.
+        text: String,
+    },
 }
 
 /// A display row with encapsulated fields.
@@ -261,6 +268,7 @@ impl AgentTree {
                     node.row.freshness = freshness;
                 }
             }
+            Event::Assignment { .. } => {}
         }
         Ok(())
     }
@@ -594,5 +602,28 @@ mod tests {
         activity(&mut tree, "root", "e1", "Last message");
         assert_eq!(tree.rows()[0].status, Status::Unknown);
         assert_eq!(tree.rows()[0].activity.as_deref(), Some("Last message"));
+    }
+    #[test]
+    fn main_assignment_updates_without_reparenting() {
+        let mut tree = tree();
+        tree.apply(Event::Assignment {
+            thread: id("root"),
+            text: "Review auth".into(),
+        })
+        .unwrap();
+        assert_eq!(tree.rows()[0].assignment.as_deref(), Some("Review auth"));
+        assert_eq!(tree.rows()[0].thread, id("root"));
+    }
+    #[test]
+    fn latest_assignment_does_not_overwrite_activity() {
+        let mut tree = tree();
+        activity(&mut tree, "root", "e1", "Reading file");
+        tree.apply(Event::Assignment {
+            thread: id("root"),
+            text: "New task".into(),
+        })
+        .unwrap();
+        assert_eq!(tree.rows()[0].assignment.as_deref(), Some("New task"));
+        assert_eq!(tree.rows()[0].activity.as_deref(), Some("Reading file"));
     }
 }

@@ -5,3 +5,5 @@
 
 pub mod agent;
 pub mod record_buffer;
+
+pub mod text;
