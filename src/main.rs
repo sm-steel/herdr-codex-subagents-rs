@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -24,6 +24,17 @@ struct Args {
 enum Action {
     /// Show local observation prerequisites, without reading credentials.
     Doctor,
+    /// Automatically attach monitors to identified Codex panes.
+    Sync,
+    /// Install the exact-identity hook; Codex requires its normal trust review.
+    Setup,
+    /// Receive an exact session-start identity from Codex (silent hook output).
+    Hook {
+        #[arg(long)]
+        herdr_bin: PathBuf,
+        #[arg(long)]
+        state_dir: PathBuf,
+    },
     /// Open a monitor pane next to the explicitly identified Codex pane.
     Open {
         #[arg(long)]
@@ -58,9 +69,40 @@ fn main() -> ExitCode {
     reason = "the CLI snapshots ambient environment once"
 )]
 fn run() -> io::Result<()> {
-    let environment: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
+    let mut environment: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
     let args = Args::parse();
     match args.command {
+        Action::Hook {
+            herdr_bin,
+            state_dir,
+        } => {
+            if env(&environment, "HERDR_ENV").is_none_or(|value| value != "1") {
+                return Ok(());
+            }
+            environment.insert("HERDR_BIN_PATH".into(), herdr_bin.into_os_string());
+            environment.insert("HERDR_PLUGIN_STATE_DIR".into(), state_dir.into_os_string());
+            hook(&environment)
+        }
+        Action::Sync => output(&sync(&environment)?),
+        Action::Setup => {
+            let host = env(&environment, "HERDR_BIN_PATH")
+                .map(PathBuf::from)
+                .ok_or_else(|| io::Error::other("Herdr executable context missing"))?;
+            let state = env(&environment, "HERDR_PLUGIN_STATE_DIR")
+                .map(PathBuf::from)
+                .ok_or_else(|| io::Error::other("Herdr plugin state directory missing"))?;
+            let sessions = sessions_dir(&environment)?;
+            let home = sessions
+                .parent()
+                .ok_or_else(|| io::Error::other("Codex home unavailable"))?;
+            herdr_codex_subagents_rs::setup::install(
+                home,
+                &std::env::current_exe()?,
+                &host,
+                &state,
+            )?;
+            output(&serde_json::json!({"configured":true,"codex_hook_review":"/hooks"}))
+        }
         Action::Doctor => output(
             &serde_json::json!({"sessions_directory_available": sessions_dir(&environment)?.is_dir(),
                 "herdr_context": env(&environment, "HERDR_BIN_PATH").is_some(),
@@ -108,6 +150,104 @@ fn run() -> io::Result<()> {
     }
 }
 
+fn sync(environment: &BTreeMap<OsString, OsString>) -> io::Result<serde_json::Value> {
+    let binary = env(environment, "HERDR_BIN_PATH")
+        .map(PathBuf::from)
+        .ok_or_else(|| io::Error::other("Herdr executable context missing"))?;
+    let state = env(environment, "HERDR_PLUGIN_STATE_DIR")
+        .map(PathBuf::from)
+        .ok_or_else(|| io::Error::other("Herdr plugin state directory missing"))?;
+    let connection = format!(
+        "{}|{}",
+        env(environment, "HERDR_SOCKET_PATH")
+            .map_or_else(String::new, |v| v.to_string_lossy().into_owned()),
+        env(environment, "HERDR_SESSION")
+            .map_or_else(String::new, |v| v.to_string_lossy().into_owned())
+    );
+    let client = HerdrClient::new(binary, child_env(environment));
+    let sessions = sessions_dir(environment)?;
+    for _ in 0..64 {
+        let result = herdr_codex_subagents_rs::attachment::sync(
+            &client,
+            &state,
+            &connection,
+            &sessions,
+            env(environment, "CODEX_HOME").map(OsString::as_os_str),
+        )?;
+        if result.get("more").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Ok(result);
+        }
+    }
+    Err(io::Error::other("monitor attachment batch limit reached"))
+}
+
+fn hook(environment: &BTreeMap<OsString, OsString>) -> io::Result<()> {
+    let mut bytes = Vec::new();
+    io::stdin().take(65_537).read_to_end(&mut bytes)?;
+    if bytes.len() > 65_536 {
+        return Err(io::Error::other("hook input exceeds limit"));
+    }
+    let payload: serde_json::Value = serde_json::from_slice(&bytes)?;
+    if payload
+        .get("hook_event_name")
+        .and_then(serde_json::Value::as_str)
+        != Some("SessionStart")
+    {
+        return Ok(());
+    }
+    let Some(id) = payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(());
+    };
+    if env(environment, "CODEX_THREAD_ID").is_some_and(|thread| thread != id) {
+        return Ok(());
+    }
+    let Some(pane) = env(environment, "HERDR_PANE_ID").and_then(|p| p.to_str()) else {
+        return Ok(());
+    };
+    let binary = env(environment, "HERDR_BIN_PATH")
+        .map(PathBuf::from)
+        .ok_or_else(|| io::Error::other("Herdr executable context missing"))?;
+    let client = HerdrClient::new(binary, child_env(environment));
+    // The hook's session identity is exact; no folder or focus fallback is used.
+    let mut detected = false;
+    for _ in 0..20 {
+        if client
+            .query(&["agent".into(), "get".into(), pane.into()])
+            .is_ok_and(|agent| {
+                agent
+                    .pointer("/result/agent/agent")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("codex")
+            })
+        {
+            detected = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if !detected {
+        return Err(io::Error::other(
+            "Codex detection did not become ready for session hook",
+        ));
+    }
+    client.report_session(
+        pane,
+        id,
+        payload.get("source").and_then(serde_json::Value::as_str),
+    )?;
+    for _ in 0..10 {
+        let result = sync(environment)?;
+        if result.get("skipped").and_then(serde_json::Value::as_u64) == Some(0) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(())
+}
 fn open(
     environment: &BTreeMap<OsString, OsString>,
     root: Option<String>,
@@ -195,6 +335,9 @@ fn child_env(environment: &BTreeMap<OsString, OsString>) -> BTreeMap<OsString, O
         "TEMP",
         "TMP",
         "HERDR_SOCKET_PATH",
+        "HERDR_PANE_ID",
+        "HERDR_WORKSPACE_ID",
+        "HERDR_TAB_ID",
         "HERDR_SESSION",
         "HERDR_ENV",
         "CODEX_HOME",

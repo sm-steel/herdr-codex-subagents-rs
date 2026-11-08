@@ -23,44 +23,51 @@ herdr plugin link .
 updating. On Windows, close running monitor panes before rebuilding the executable.
 GitHub installs run the manifest's Cargo build command.
 
-## Open the panel
+## Automatic panels
 
-Run the **Show Codex subagents** plugin action on your Codex pane. It uses Herdr's
-recorded session identity when available. Herdr's Codex integration must already
-be installed and must have reported the session; this plugin does not change your
-Codex hooks or configuration.
+The plugin opens one 36-column monitor beside each exactly identified Codex pane,
+without moving focus. Main and descendants share a connected tree, task/activity
+previews and animated working icons. Repeated startup/events reuse existing panels.
 
-For a session without that identity, run from inside the source Herdr pane:
+After linking into a running server, run the **Configure automatic Codex panels**
+action once. It preserves other Codex hooks and installs a silent Rust `SessionStart`
+hook. Review and trust that hook in Codex `/hooks`; Codex requires this human step.
+The action is available as `herdr plugin action invoke sm-steel.codex-subagents.setup`.
+Then **Attach Codex monitors automatically** attaches existing resumed chats. Both
+configuration and attachment also run automatically at future Herdr server starts.
 
-```powershell
-./target/release/herdr-codex-subagents-rs open --root-thread <Codex-thread-UUID> --target-pane <Herdr-pane-ID>
-```
+No thread UUIDs need to be entered. Exact identity comes from the trusted hook or
+an unambiguous `codex resume <UUID>` process argument. An already-running fresh
+session without either identity remains untouched until the hook reports it.
+Never select sessions by directory or recency. One panel lists all descendants;
+completed agents stay visible. New monitors default to 36 terminal columns where
+Herdr's minimum pane sizes permit; later window resizing follows Herdr split ratios.
 
-On Windows `.exe` is optional. The root is the main thread UUID, not a child UUID.
-No session is selected by folder or by recency. A wrong or absent root fails safely.
-Each open invocation currently creates a panel; close an old panel before reopening.
+The hook uses Herdr's native session-reporting protocol, then reconciles panels.
+Startup/detection/status/move events provide additional reconciliation. If pane
+creation has an ambiguous failure, the registry marks it pending and suppresses
+retries rather than opening duplicates; diagnostics report the skipped attachment.
+Moving a source retains its existing monitor, which may remain in its original tab.
 
-To observe without plugin context:
+Developer commands `watch --root-thread <UUID> [--once]` and `open` remain available
+for explicit observation and diagnostics. `--once` prints JSON; `--sessions-dir`
+selects a fixture/custom log directory. Defaults are `CODEX_HOME/sessions` or
+`~/.codex/sessions`. `doctor` checks prerequisites without reading credentials.
 
-```powershell
-./target/release/herdr-codex-subagents-rs watch --root-thread <UUID>
-./target/release/herdr-codex-subagents-rs watch --root-thread <UUID> --once
-```
+## Tree and controls
 
-`--once` prints JSON and exits. `--sessions-dir <path>` points to a test or custom
-rollout directory. Otherwise `CODEX_HOME/sessions` or the platform home directory's
-`.codex/sessions` is used. `doctor` prints prerequisite availability without reading
-credentials. Linux uses the same commands.
+Main stays pinned first with a right-aligned `[working of total]` descendant count.
+Active branches sort first. The animated four-row Braille icon also marks parents
+with active descendants. Other rows show a gray `⣿`, with one space on each side.
+Tree connectors, selection, text and footer use Catppuccin Mocha colors.
 
-## Status and keys
+Up/down selects, left/right collapses/expands or follows parent/child, and
+Enter/Space or a mouse click toggles a branch. `q` or Ctrl-C exits only the monitor.
+The two-row footer has a separate background; no extra header or outer border.
 
-- Main is pinned first, with descendants indented below it.
-- Working animates; waiting, idle, completed, interrupted, failed, closed and
-  unknown have distinct text markers. Color is supplementary.
-- Status is the last **recorded lifecycle**, not proof that a process is still
-  running. Quiet logs never imply completion. Source read failures show stale.
-- Task and latest activity are separate; unavailable data stays unavailable.
-- Up/down scroll children; `q` or Ctrl-C exits only the monitor.
+Status is the last recorded lifecycle, not proof that a process is still running.
+Quiet logs never imply completion. Source failures show stale. Task and activity
+remain separate. JSON observation retains every distinct lifecycle outcome.
 
 ## Limits and privacy
 
@@ -95,3 +102,6 @@ maintainer review before implementation; see [Rust rules](docs/rust-rules.md).
 - [Navigation PoC](poc/RESULTS.md)
 
 MIT OR Apache-2.0. Independent project, not affiliated with OpenAI or Herdr.
+
+Main starts expanded; nested subagent branches start collapsed. Expanding a branch
+keeps it expanded across updates. Hidden descendants still affect icons and counts.

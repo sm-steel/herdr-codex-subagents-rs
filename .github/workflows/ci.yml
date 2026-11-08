@@ -74,7 +74,7 @@ jobs:
           "$host" --session monitor-ci pane wait-output "$panel" --match Main --timeout 10000
           "$host" --session monitor-ci pane read "$panel" --source visible --lines 40 > "$smoke_dir/screen.txt"
           grep -F 'Main' "$smoke_dir/screen.txt"
-          grep -F 'thread switching disabled' "$smoke_dir/screen.txt"
+          grep -F 'read only' "$smoke_dir/screen.txt"
           "$host" --session monitor-ci pane send-text "$panel" q
           for attempt in {1..50}; do
             if ! "$host" --session monitor-ci pane get "$panel" >/dev/null 2>&1; then

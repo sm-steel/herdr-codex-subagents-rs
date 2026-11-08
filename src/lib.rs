@@ -10,5 +10,7 @@ pub mod text;
 
 pub mod rollout;
 
+pub mod attachment;
 pub mod herdr;
 pub mod panel;
+pub mod setup;
