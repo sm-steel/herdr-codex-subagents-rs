@@ -20,7 +20,8 @@ herdr plugin link .
 ```
 
 `plugin link` registers a local checkout; it does not build it. Rebuild after
-updating. GitHub installs run the manifest's Cargo build command.
+updating. On Windows, close running monitor panes before rebuilding the executable.
+GitHub installs run the manifest's Cargo build command.
 
 ## Open the panel
 

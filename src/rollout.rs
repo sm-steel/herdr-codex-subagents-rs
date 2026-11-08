@@ -14,7 +14,8 @@ use crate::text::display_text;
 
 const RECORD_LIMIT: usize = 1_048_576;
 const READ_BUDGET: u64 = 4_194_304;
-const MAX_FILES: usize = 10_000;
+const DISCOVERY_BATCH: usize = 1_000;
+const MAX_SOURCES: usize = 1_000;
 
 /// A local observer, pinned to an exact root thread ID.
 pub struct Monitor {
@@ -22,7 +23,7 @@ pub struct Monitor {
     root: ThreadId,
     tree: AgentTree,
     files: BTreeMap<PathBuf, Tail>,
-    indexed: BTreeSet<PathBuf>,
+    scan: Option<ScanCursor>,
     candidates: BTreeMap<PathBuf, Metadata>,
     warnings: usize,
 }
@@ -38,12 +39,53 @@ struct Tail {
     modified: Option<SystemTime>,
     buffer: RecordBuffer,
     context: DecodeContext,
+    identity: Option<same_file::Handle>,
+    anchor: Vec<u8>,
+    generation: u64,
 }
 
 #[derive(Default)]
 struct DecodeContext {
     pending: BTreeMap<String, String>,
     turn: Option<String>,
+    terminal: bool,
+}
+
+struct ScanCursor {
+    directories: Vec<fs::ReadDir>,
+}
+impl ScanCursor {
+    fn new(path: &Path) -> io::Result<Self> {
+        Ok(Self {
+            directories: vec![fs::read_dir(path)?],
+        })
+    }
+    fn batch(&mut self) -> io::Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        let mut visited = 0;
+        while visited < DISCOVERY_BATCH {
+            let Some(directory) = self.directories.last_mut() else {
+                break;
+            };
+            let Some(entry) = directory.next() else {
+                self.directories.pop();
+                continue;
+            };
+            visited += 1;
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                self.directories.push(fs::read_dir(entry.path())?);
+            } else if kind.is_file() && entry.path().extension().is_some_and(|ext| ext == "jsonl") {
+                paths.push(entry.path());
+            }
+        }
+        paths.sort();
+        Ok(paths)
+    }
 }
 
 impl Monitor {
@@ -55,7 +97,7 @@ impl Monitor {
             tree: AgentTree::new(root.clone()),
             root,
             files: BTreeMap::new(),
-            indexed: BTreeSet::new(),
+            scan: None,
             candidates: BTreeMap::new(),
             warnings: 0,
         }
@@ -67,24 +109,84 @@ impl Monitor {
     /// Returns an error if the session directory cannot be inspected.
     pub fn discover(&mut self) -> io::Result<()> {
         let _span =
-            tracing::debug_span!("rollout_discovery", known_files = self.indexed.len()).entered();
-        let mut paths = Vec::new();
-        collect_paths(&self.sessions_dir, &mut paths)?;
-        for path in paths {
-            if self.indexed.contains(&path) {
-                continue;
-            }
-            match read_metadata(&path) {
-                Ok(Some(metadata)) => {
-                    self.indexed.insert(path.clone());
-                    self.candidates.insert(path, metadata);
-                }
-                Ok(None) => {}
-                Err(_) => {
-                    self.warnings += 1;
-                }
+            tracing::debug_span!("rollout_discovery", known_files = self.files.len()).entered();
+        if self
+            .scan
+            .as_ref()
+            .is_none_or(|scan| scan.directories.is_empty())
+        {
+            self.scan = Some(ScanCursor::new(&self.sessions_dir)?);
+        }
+        loop {
+            let paths = if let Some(scan) = &mut self.scan {
+                scan.batch()?
+            } else {
+                Vec::new()
+            };
+            self.inspect_candidates(paths);
+            self.connect_sources();
+            if self.files.values().any(|tail| tail.thread == self.root)
+                || self
+                    .scan
+                    .as_ref()
+                    .is_none_or(|scan| scan.directories.is_empty())
+            {
+                break;
             }
         }
+        if !self.files.values().any(|tail| tail.thread == self.root) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "root thread rollout not found",
+            ));
+        }
+        Ok(())
+    }
+
+    fn inspect_candidates(&mut self, paths: Vec<PathBuf>) {
+        for path in paths {
+            if self.files.contains_key(&path) {
+                continue;
+            }
+            let result = read_metadata(&path);
+            if result.is_err() {
+                self.warnings += 1;
+                continue;
+            }
+            let Ok(Some(metadata)) = result else {
+                continue;
+            };
+            if metadata.thread != self.root && metadata.parent.is_none() {
+                continue;
+            }
+            self.retain_candidate(path, metadata);
+        }
+    }
+
+    fn retain_candidate(&mut self, path: PathBuf, metadata: Metadata) {
+        if self.candidates.len() >= MAX_SOURCES && !self.candidates.contains_key(&path) {
+            let known: BTreeSet<_> = self
+                .files
+                .values()
+                .map(|tail| tail.thread.clone())
+                .collect();
+            let evict = self
+                .candidates
+                .iter()
+                .find(|(_, candidate)| {
+                    candidate.thread != self.root && !known.contains(&candidate.thread)
+                })
+                .map(|(path, _)| path.clone());
+            let Some(evict) = evict else {
+                self.warnings += 1;
+                return;
+            };
+            self.candidates.remove(&evict);
+        }
+        self.candidates.insert(path, metadata);
+    }
+
+    fn connect_sources(&mut self) {
         let mut known = BTreeSet::from([self.root.clone()]);
         loop {
             let previous = known.len();
@@ -121,16 +223,12 @@ impl Monitor {
                     modified: None,
                     buffer: RecordBuffer::new(RECORD_LIMIT),
                     context: DecodeContext::default(),
+                    identity: None,
+                    anchor: Vec::new(),
+                    generation: 0,
                 },
             );
         }
-        if !self.files.values().any(|tail| tail.thread == self.root) {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "root thread rollout not found",
-            ));
-        }
-        Ok(())
     }
 
     /// Incrementally read bounded new bytes and return the current tree.
@@ -154,8 +252,13 @@ impl Monitor {
                 thread: tail.thread.clone(),
                 freshness: Freshness::Fresh,
             });
-            self.warnings +=
-                apply_records(&mut self.tree, &tail.thread, &mut tail.context, records);
+            self.warnings += apply_records(
+                &mut self.tree,
+                &tail.thread,
+                &mut tail.context,
+                tail.generation,
+                records,
+            );
         }
         self.tree.rows()
     }
@@ -171,6 +274,7 @@ fn apply_records(
     tree: &mut AgentTree,
     thread: &ThreadId,
     context: &mut DecodeContext,
+    generation: u64,
     records: Vec<(u64, Record)>,
 ) -> usize {
     let mut warnings = 0;
@@ -183,7 +287,7 @@ fn apply_records(
             warnings += 1;
             continue;
         };
-        for event in decode(&record, thread, offset, context) {
+        for event in decode(&record, thread, offset, generation, context) {
             if tree.apply(event).is_err() {
                 warnings += 1;
             }
@@ -196,21 +300,51 @@ impl Tail {
     fn read(&mut self, path: &Path, budget: &mut u64) -> io::Result<Vec<(u64, Record)>> {
         let mut file = File::open(path)?;
         let metadata = file.metadata()?;
+        let identity = same_file::Handle::from_file(file.try_clone()?)?;
+        let Some(header) = read_metadata_file(&file)? else {
+            return Err(io::Error::other("rollout header unavailable"));
+        };
+        if header.thread != self.thread {
+            return Err(io::Error::other("rollout thread identity changed"));
+        }
+        let mut changed = self
+            .identity
+            .as_ref()
+            .is_some_and(|previous| previous != &identity);
+        if self.offset > 0 && metadata.len() >= self.offset && !self.anchor.is_empty() {
+            file.seek(SeekFrom::Start(self.offset - self.anchor.len() as u64))?;
+            let mut anchor = vec![0; self.anchor.len()];
+            file.read_exact(&mut anchor)?;
+            changed |= anchor != self.anchor;
+        }
         let modified = metadata.modified().ok();
-        if metadata.len() < self.offset
+        if changed
+            || metadata.len() < self.offset
             || (metadata.len() == self.offset && modified != self.modified)
         {
             self.offset = 0;
             self.buffer.reset();
             self.context = DecodeContext::default();
+            self.generation = self.generation.saturating_add(1);
         }
+        self.identity = Some(identity);
         file.seek(SeekFrom::Start(self.offset))?;
         let mut bytes = Vec::new();
-        file.take(*budget).read_to_end(&mut bytes)?;
+        Read::by_ref(&mut file)
+            .take(*budget)
+            .read_to_end(&mut bytes)?;
         *budget = budget.saturating_sub(bytes.len() as u64);
         let start = self.offset;
         self.offset += bytes.len() as u64;
         self.modified = modified;
+        let anchor_len = self.offset.min(128);
+        file.seek(SeekFrom::Start(self.offset - anchor_len))?;
+        self.anchor = vec![
+            0;
+            usize::try_from(anchor_len)
+                .map_err(|_| io::Error::other("invalid anchor length"))?
+        ];
+        file.read_exact(&mut self.anchor)?;
         // Identity is the byte offset of the completed record, not its read chunk.
         let mut records = Vec::new();
         for (index, byte) in bytes.iter().enumerate() {
@@ -222,33 +356,15 @@ impl Tail {
     }
 }
 
-fn collect_paths(directory: &Path, paths: &mut Vec<PathBuf>) -> io::Result<()> {
-    if paths.len() >= MAX_FILES {
-        return Ok(());
-    }
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        if kind.is_symlink() {
-            continue;
-        }
-        if kind.is_dir() {
-            collect_paths(&entry.path(), paths)?;
-        } else if kind.is_file() && entry.path().extension().is_some_and(|ext| ext == "jsonl") {
-            paths.push(entry.path());
-        }
-        if paths.len() >= MAX_FILES {
-            break;
-        }
-    }
-    paths.sort();
-    Ok(())
+fn read_metadata(path: &Path) -> io::Result<Option<Metadata>> {
+    read_metadata_file(&File::open(path)?)
 }
 
-fn read_metadata(path: &Path) -> io::Result<Option<Metadata>> {
+fn read_metadata_file(file: &File) -> io::Result<Option<Metadata>> {
+    let mut file = file.try_clone()?;
+    file.seek(SeekFrom::Start(0))?;
     let mut bytes = Vec::new();
-    BufReader::new(File::open(path)?.take(RECORD_LIMIT as u64 + 1))
-        .read_until(b'\n', &mut bytes)?;
+    BufReader::new(file.take(RECORD_LIMIT as u64 + 1)).read_until(b'\n', &mut bytes)?;
     if bytes.len() > RECORD_LIMIT || bytes.last() != Some(&b'\n') {
         return Ok(None);
     }
@@ -297,23 +413,11 @@ fn decode(
     record: &Value,
     thread: &ThreadId,
     offset: u64,
+    generation: u64,
     context: &mut DecodeContext,
 ) -> Vec<Event> {
     if text(record, "/type") == Some("response_item") {
-        if text(record, "/payload/type") == Some("function_call")
-            && text(record, "/payload/name") == Some("spawn_agent")
-            && let (Some(call_id), Some(arguments)) = (
-                text(record, "/payload/call_id"),
-                text(record, "/payload/arguments"),
-            )
-            && let Ok(arguments) = serde_json::from_str::<Value>(arguments)
-            && let Some(message) = text(&arguments, "/message")
-            && context.pending.len() < 1000
-        {
-            context
-                .pending
-                .insert(display_text(call_id, 256), display_text(message, 4096));
-        }
+        remember_spawn(record, context);
         return Vec::new();
     }
     if text(record, "/type") != Some("event_msg") {
@@ -324,8 +428,14 @@ fn decode(
     };
     let kind = text(payload, "/type").unwrap_or_default();
     let turn = text(payload, "/turn_id").or_else(|| text(payload, "/turn_attribution/turn_id"));
-    if let Some(turn) = turn {
-        context.turn = Some(display_text(turn, 256));
+    if kind == "task_started"
+        && let Some(turn) = turn
+    {
+        let turn = display_text(turn, 256);
+        if context.turn.as_ref() != Some(&turn) {
+            context.turn = Some(turn);
+            context.terminal = false;
+        }
     }
     let status = match kind {
         "task_started" => Some(Status::Working),
@@ -358,7 +468,9 @@ fn decode(
     }
     if text(payload, "/item/type") == Some("CollabAgentToolCall")
         && text(payload, "/item/tool") == Some("wait")
+        && !context.terminal
         && let Some(turn) = &context.turn
+        && text(payload, "/turn_id").is_none_or(|observed| observed == turn)
     {
         events.push(Event::Lifecycle {
             thread: thread.clone(),
@@ -371,11 +483,16 @@ fn decode(
         });
     }
     if let (Some(status), Some(turn)) = (status, turn) {
-        events.push(Event::Lifecycle {
-            thread: thread.clone(),
-            turn: turn.into(),
-            status,
-        });
+        if status != Status::Working || !context.terminal {
+            events.push(Event::Lifecycle {
+                thread: thread.clone(),
+                turn: turn.into(),
+                status,
+            });
+        }
+        if status != Status::Working && context.turn.as_ref().is_none_or(|active| active == turn) {
+            context.terminal = true;
+        }
     }
     let message = match kind {
         "agent_message" | "user_message" => text(payload, "/message"),
@@ -393,12 +510,29 @@ fn decode(
         } else {
             events.push(Event::Activity {
                 thread: thread.clone(),
-                event_id: format!("record:{offset}"),
+                event_id: format!("record:{generation}:{offset}"),
                 text: message,
             });
         }
     }
     events
+}
+
+fn remember_spawn(record: &Value, context: &mut DecodeContext) {
+    if text(record, "/payload/type") == Some("function_call")
+        && text(record, "/payload/name") == Some("spawn_agent")
+        && let (Some(call_id), Some(arguments)) = (
+            text(record, "/payload/call_id"),
+            text(record, "/payload/arguments"),
+        )
+        && let Ok(arguments) = serde_json::from_str::<Value>(arguments)
+        && let Some(message) = text(&arguments, "/message")
+        && context.pending.len() < 1000
+    {
+        context
+            .pending
+            .insert(display_text(call_id, 256), display_text(message, 4096));
+    }
 }
 
 fn item_text(payload: &Value) -> Option<&str> {

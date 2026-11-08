@@ -34,6 +34,56 @@ jobs:
       - name: Format
         if: matrix.toolchain == '1.99.0'
         run: cargo fmt --check
+      - name: Real Linux Herdr TUI smoke
+        if: matrix.os == 'ubuntu-latest' && matrix.toolchain == '1.99.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked
+          smoke_dir="$RUNNER_TEMP/herdr-monitor-smoke"
+          mkdir -p "$smoke_dir/home" "$smoke_dir/codex/sessions"
+          curl --fail --location --silent --show-error \
+            https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64 \
+            --output "$smoke_dir/herdr"
+          echo "14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d  $smoke_dir/herdr" | sha256sum --check
+          chmod +x "$smoke_dir/herdr"
+          export HOME="$smoke_dir/home"
+          export HERDR_CONFIG_PATH="$smoke_dir/config.toml"
+          printf 'onboarding = false\n' > "$HERDR_CONFIG_PATH"
+          printf '%s\n' \
+            '{"type":"session_meta","payload":{"id":"smoke-root"}}' \
+            '{"type":"event_msg","payload":{"type":"task_started","turn_id":"one"}}' \
+            > "$smoke_dir/codex/sessions/root.jsonl"
+          host="$smoke_dir/herdr"
+          "$host" plugin link "$GITHUB_WORKSPACE"
+          "$host" --session monitor-ci server > "$smoke_dir/server.log" 2>&1 &
+          server_pid=$!
+          trap '"$host" --session monitor-ci server stop >/dev/null 2>&1 || true; wait "$server_pid" || true' EXIT
+          for attempt in {1..50}; do
+            if "$host" --session monitor-ci workspace create --cwd "$GITHUB_WORKSPACE" --no-focus > "$smoke_dir/workspace.json" 2>/dev/null; then
+              break
+            fi
+            sleep 0.1
+          done
+          parent=$(jq -er '.result.root_pane.pane_id' "$smoke_dir/workspace.json")
+          "$host" --session monitor-ci plugin pane open \
+            --plugin sm-steel.codex-subagents --entrypoint monitor --placement split \
+            --target-pane "$parent" --direction right --no-focus \
+            --env HCS_ROOT_THREAD=smoke-root --env "CODEX_HOME=$smoke_dir/codex" > "$smoke_dir/pane.json"
+          panel=$(jq -er '.result.plugin_pane.pane.pane_id' "$smoke_dir/pane.json")
+          "$host" --session monitor-ci pane wait-output "$panel" --match Main --timeout 10000
+          "$host" --session monitor-ci pane read "$panel" --source visible --lines 40 > "$smoke_dir/screen.txt"
+          grep -F 'Main' "$smoke_dir/screen.txt"
+          grep -F 'thread switching disabled' "$smoke_dir/screen.txt"
+          "$host" --session monitor-ci pane send-text "$panel" q
+          for attempt in {1..50}; do
+            if ! "$host" --session monitor-ci pane get "$panel" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 0.1
+          done
+          echo 'Monitor did not close cleanly' >&2
+          exit 1
   dependencies:
     runs-on: ubuntu-latest
     steps:

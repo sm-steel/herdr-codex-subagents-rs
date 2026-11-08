@@ -177,3 +177,114 @@ fn v2_explicit_wait_has_waiting_state_until_wait_completes() {
         .unwrap();
     assert_eq!(reader.poll()[0].status(), Status::Working);
 }
+
+#[test]
+fn larger_replacement_replays_new_turn_instead_of_skipping_prefix() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("root.jsonl");
+    fs::write(&path, metadata("root", None) + &event("task_started", "r1")).unwrap();
+    let mut reader = monitor(&dir);
+    reader.discover().unwrap();
+    assert_eq!(reader.poll()[0].status(), Status::Working);
+    let replacement =
+        metadata("root", None) + &event("task_started", "r2") + &event("task_complete", "r2");
+    let new_path = dir.path().join("replacement.tmp");
+    fs::write(&new_path, replacement).unwrap();
+    fs::remove_file(&path).unwrap();
+    fs::rename(new_path, &path).unwrap();
+    assert_eq!(reader.poll()[0].status(), Status::Completed);
+}
+
+#[test]
+fn changed_session_identity_never_leaks_another_sessions_activity() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("root.jsonl");
+    fs::write(&path, metadata("root", None)).unwrap();
+    let mut reader = monitor(&dir);
+    reader.discover().unwrap();
+    let _ = reader.poll();
+    let activity = serde_json::json!({"type":"event_msg","payload":{"type":"agent_message","message":"OTHER SESSION TEXT"}});
+    fs::write(&path, metadata("other", None) + &format!("{activity}\n")).unwrap();
+    let rows = reader.poll();
+    assert_eq!(rows[0].activity(), None);
+    assert_eq!(
+        rows[0].freshness(),
+        herdr_codex_subagents_rs::agent::Freshness::Stale
+    );
+}
+
+#[test]
+fn replacement_activity_at_same_offset_replaces_old_text() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("root.jsonl");
+    let content = |message: &str| {
+        metadata("root", None)
+            + &format!(
+                "{}\n",
+                serde_json::json!({
+        "type":"event_msg","payload":{"type":"agent_message","message":message}})
+            )
+    };
+    fs::write(&path, content("old")).unwrap();
+    let mut reader = monitor(&dir);
+    reader.discover().unwrap();
+    assert_eq!(reader.poll()[0].activity(), Some("old"));
+    let new_path = dir.path().join("replacement.tmp");
+    fs::write(&new_path, content("new")).unwrap();
+    fs::remove_file(&path).unwrap();
+    fs::rename(new_path, &path).unwrap();
+    assert_eq!(reader.poll()[0].activity(), Some("new"));
+}
+
+#[test]
+fn late_wait_cannot_steal_a_newer_turn() {
+    let dir = TempDir::new().unwrap();
+    let old_wait = serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":"r1",
+        "item":{"type":"CollabAgentToolCall","tool":"wait"}}});
+    fs::write(
+        dir.path().join("root.jsonl"),
+        metadata("root", None)
+            + &event("task_started", "r1")
+            + &event("task_started", "r2")
+            + &format!("{old_wait}\n")
+            + &event("task_complete", "r1"),
+    )
+    .unwrap();
+    let mut reader = monitor(&dir);
+    reader.discover().unwrap();
+    assert_eq!(reader.poll()[0].status(), Status::Working);
+}
+
+#[test]
+fn delayed_wait_cannot_reopen_a_completed_turn() {
+    let dir = TempDir::new().unwrap();
+    let old_wait = serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":"r1",
+        "item":{"type":"CollabAgentToolCall","tool":"wait"}}});
+    fs::write(
+        dir.path().join("root.jsonl"),
+        metadata("root", None)
+            + &event("task_started", "r1")
+            + &event("task_complete", "r1")
+            + &format!("{old_wait}\n"),
+    )
+    .unwrap();
+    let mut reader = monitor(&dir);
+    reader.discover().unwrap();
+    assert_eq!(reader.poll()[0].status(), Status::Completed);
+}
+
+#[test]
+fn discovery_advances_past_first_ten_thousand_files() {
+    let dir = TempDir::new().unwrap();
+    for index in 0..10_005 {
+        fs::write(
+            dir.path().join(format!("{index:05}.jsonl")),
+            metadata("unrelated", None),
+        )
+        .unwrap();
+    }
+    fs::write(dir.path().join("zzzz-root.jsonl"), metadata("root", None)).unwrap();
+    let mut reader = monitor(&dir);
+    reader.discover().unwrap();
+    assert_eq!(reader.poll()[0].thread().as_str(), "root");
+}

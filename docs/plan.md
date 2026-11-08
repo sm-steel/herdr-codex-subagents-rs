@@ -13,7 +13,7 @@ Herdr's CLI; observation never submits prompts or changes Codex configuration.
 
 **Tech Stack:** Rust 2024, Ratatui/Crossterm, serde/serde_json, clap, tracing;
 tempfile/assert_cmd/proptest as needed. Resolve and approve exact dependency
-versions during foundation; no product Cargo project exists yet.
+versions during foundation; the Cargo package and lockfile now exist.
 
 **Spec:** [design.md](design.md). Rules: [rust-rules.md](rust-rules.md).
 
@@ -157,5 +157,5 @@ version and unverifiable target. Uses task 2 client and task 3 identities.
 
 ## Handoff
 
-The repository contains planning and a throwaway spike only. Review the design,
-especially screen-driven navigation limits, before implementing these tasks.
+The feature branch contains a monitoring preview plus the exploratory spike. Review the design,
+especially screen-driven navigation limits, before resuming the deferred navigation tasks.
