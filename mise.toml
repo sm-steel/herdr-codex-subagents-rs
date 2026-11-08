@@ -6,3 +6,94 @@
 "aqua:gitleaks/gitleaks" = "8.30.1"
 "aqua:rhysd/actionlint" = "1.7.12"
 "aqua:zizmorcore/zizmor" = "1.30.1"
+"github:cocogitto/cocogitto" = "7.0.0"
+"aqua:astral-sh/uv" = "0.13.7"
+
+[tasks.fmt]
+description = "Format Rust and Python sources"
+run = ["cargo fmt", "uvx --from ruff==0.17.4 ruff format scripts tests/installer tests/release"]
+
+[tasks."fmt:check"]
+description = "Check Rust and Python formatting"
+run = ["cargo fmt --check", "uvx --from ruff==0.17.4 ruff format --check scripts tests/installer tests/release"]
+
+[tasks.lint]
+description = "Lint Rust and Python and type-check release helpers"
+depends = ["lint:rust", "lint:python", "typecheck"]
+
+[tasks."lint:rust"]
+description = "Run strict Rust Clippy"
+run = "cargo clippy --locked --all-targets -- -D warnings"
+
+[tasks."lint:python"]
+description = "Lint installer and release helpers"
+run = "uvx --from ruff==0.17.4 ruff check scripts tests/installer tests/release"
+
+[tasks.typecheck]
+description = "Type-check shared release helpers"
+run = "uvx --from ty==0.0.99 ty check scripts"
+
+[tasks.test]
+description = "Run Rust tests"
+run = "cargo test --locked"
+
+[tasks."test:installers"]
+description = "Run offline installer fixtures"
+run = "uv run --no-project tests/installer/test_installers.py"
+
+[tasks."test:release"]
+description = "Run offline release tooling fixtures"
+run = "uv run --no-project tests/release/test_release.py"
+
+[tasks.deny]
+description = "Audit dependency policies"
+run = "cargo-deny check"
+
+[tasks.check]
+description = "Run formatting, lint, Rust tests, installer/release fixtures and dependency audit"
+depends = ["fmt:check", "lint", "test", "test:installers", "test:release", "deny"]
+
+[tasks."build:release"]
+description = "Build a source release for the current platform"
+run = "cargo build --release --locked"
+
+[tasks."build:linux"]
+description = "Build Linux x86-64 musl release (requires musl target/linker)"
+run = "cargo build --release --locked --target x86_64-unknown-linux-musl"
+
+[tasks."build:windows"]
+description = "Build Windows x86-64 MSVC release (requires Windows MSVC tools)"
+run = "cargo build --release --locked --target x86_64-pc-windows-msvc"
+env = { RUSTFLAGS = "-C target-feature=+crt-static" }
+
+[tasks."package:linux"]
+description = "Package the existing Linux musl release binary"
+run = "uv run --no-project scripts/package_release.py --target x86_64-unknown-linux-musl --binary-path target/x86_64-unknown-linux-musl/release/herdr-codex-subagents-rs --output-directory dist/linux"
+
+[tasks."package:windows"]
+description = "Package the existing Windows MSVC release binary"
+run = "uv run --no-project scripts/package_release.py --target x86_64-pc-windows-msvc --binary-path target/x86_64-pc-windows-msvc/release/herdr-codex-subagents-rs.exe --output-directory dist/windows"
+
+[tasks."version:next"]
+description = "Preview the next Cocogitto version without changing files"
+run = "cog bump --auto --dry-run"
+
+[tasks."release:prepare"]
+description = "Create the local Cocogitto version commit, changelog and tag on main"
+run = "cog bump --auto"
+
+[tasks."release:publish"]
+description = "Explicitly push clean main and its exact HEAD version tag atomically"
+run = "uv run --no-project scripts/publish_release.py"
+
+[tasks."plugin:link"]
+description = "Register this source checkout with Herdr"
+run = "herdr plugin link ."
+
+[tasks."plugin:setup"]
+description = "Configure automatic panels in a running Herdr server"
+run = "herdr plugin action invoke sm-steel.codex-subagents.setup"
+
+[tasks."plugin:sync"]
+description = "Attach monitors to known Codex sessions"
+run = "herdr plugin action invoke sm-steel.codex-subagents.sync"

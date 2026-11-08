@@ -63,12 +63,12 @@ You need Rust 1.99.0 and [mise](https://mise.jdx.dev/).
 
 ```sh
 mise install
-cargo test --locked
-cargo clippy --locked --all-targets -- -D warnings
+mise run check
 ```
 
 See the [design](docs/design.md), [Rust conventions](docs/rust-rules.md) and
-[platform checks](docs/compatibility.md).
+[platform checks](docs/compatibility.md). Versions and releases use
+[Cocogitto through mise tasks](docs/packaging.md).
 
 ## License
 

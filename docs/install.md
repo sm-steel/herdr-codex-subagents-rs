@@ -57,7 +57,7 @@ directories while their binaries may still be running. To switch back, run
 Installer verification uses synthetic archives and a fake Herdr executable:
 
 ```sh
-uv run --no-project tests/installer/test_installers.py
+mise run test:installers
 ```
 
 See [usage](usage.md) for plugin behavior and [compatibility](compatibility.md)
