@@ -1,0 +1,58 @@
+[package]
+name = "herdr-codex-subagents-rs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+description = "Local Codex main and subagent activity panel for Herdr"
+repository = "https://github.com/sm-steel/herdr-codex-subagents-rs"
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+indexing_slicing = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+cognitive_complexity = "warn"
+excessive_nesting = "warn"
+redundant_clone = "warn"
+use_self = "warn"
+exit = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+get_unwrap = "warn"
+empty_drop = "warn"
+empty_structs_with_brackets = "warn"
+or_fun_call = "warn"
+needless_pass_by_ref_mut = "warn"
+needless_collect = "warn"
+str_to_string = "warn"
+iter_over_hash_type = "warn"
+fallible_impl_from = "warn"
+mod_module_files = "warn"
+disallowed_methods = "warn"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
