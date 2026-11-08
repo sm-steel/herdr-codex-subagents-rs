@@ -52,6 +52,15 @@ curl -fsSL https://github.com/sm-steel/herdr-codex-subagents-rs/releases/latest/
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/sm-steel/herdr-codex-subagents-rs/releases/latest/download/install.ps1 | iex"
 ```
 
+**Alternative: build with Herdr**
+
+```sh
+herdr plugin install sm-steel/herdr-codex-subagents-rs
+```
+
+Requires Git, Rust 1.99.0 (via rustup), and a native linker: MSVC Build Tools
+on Windows or a C compiler toolchain on Linux. Herdr builds the plugin from source.
+
 Review the hook once in Codex `/hooks`. Later sessions attach automatically.
 [Installation](docs/install.md) covers source builds and updates.
 You can also ask your agent: “Install this for me:
