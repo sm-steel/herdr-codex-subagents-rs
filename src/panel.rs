@@ -7,7 +7,7 @@ use std::sync::{
     mpsc,
 };
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
@@ -49,20 +49,25 @@ impl Drop for StopOnDrop<'_> {
     }
 }
 
-fn observe_loop(
-    monitor: &mut Monitor,
-    stop: &AtomicBool,
-    sender: &mpsc::SyncSender<(Vec<AgentRow>, usize)>,
-) {
+struct Observation {
+    rows: Vec<AgentRow>,
+    warnings: usize,
+    activity: BTreeMap<ThreadId, SystemTime>,
+}
+
+fn observe_loop(monitor: &mut Monitor, stop: &AtomicBool, sender: &mpsc::SyncSender<Observation>) {
     let mut discovery = Instant::now();
     while !stop.load(Ordering::Relaxed) {
         if discovery.elapsed() >= Duration::from_secs(2) {
             let _ = monitor.discover();
             discovery = Instant::now();
         }
-        if let Err(mpsc::TrySendError::Disconnected(_)) =
-            sender.try_send((monitor.poll(), monitor.warnings()))
-        {
+        let snapshot = Observation {
+            rows: monitor.poll(),
+            warnings: monitor.warnings(),
+            activity: monitor.activity_times(),
+        };
+        if let Err(mpsc::TrySendError::Disconnected(_)) = sender.try_send(snapshot) {
             break;
         }
         for _ in 0..25 {
@@ -79,6 +84,7 @@ const BASE: Color = Color::Rgb(30, 30, 46);
 const MANTLE: Color = Color::Rgb(24, 24, 37);
 const SURFACE: Color = Color::Rgb(49, 50, 68);
 const GRAY: Color = Color::Rgb(108, 112, 134);
+const LEAF: Color = Color::Rgb(69, 71, 90);
 const SUBTEXT: Color = Color::Rgb(166, 173, 200);
 const TEXT: Color = Color::Rgb(205, 214, 244);
 const WORKING: Color = Color::Rgb(137, 180, 250);
@@ -118,11 +124,16 @@ struct TreeView<'a> {
     rows: &'a [AgentRow],
     children: BTreeMap<usize, Vec<usize>>,
     active: BTreeSet<usize>,
+    latest: BTreeMap<usize, SystemTime>,
     collapsed: &'a BTreeSet<ThreadId>,
 }
 
 impl<'a> TreeView<'a> {
-    fn new(rows: &'a [AgentRow], collapsed: &'a BTreeSet<ThreadId>) -> Self {
+    fn new(
+        rows: &'a [AgentRow],
+        collapsed: &'a BTreeSet<ThreadId>,
+        activity: &BTreeMap<ThreadId, SystemTime>,
+    ) -> Self {
         let mut children: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         let mut stack = Vec::new();
         for (index, row) in rows.iter().enumerate() {
@@ -142,10 +153,29 @@ impl<'a> TreeView<'a> {
                 active.insert(index);
             }
         }
+        let mut latest: BTreeMap<usize, SystemTime> = BTreeMap::new();
+        for (index, row) in rows.iter().enumerate().rev() {
+            let time = activity
+                .get(row.thread())
+                .copied()
+                .into_iter()
+                .chain(
+                    children
+                        .get(&index)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|child| latest.get(child).copied()),
+                )
+                .max();
+            if let Some(time) = time {
+                latest.insert(index, time);
+            }
+        }
         Self {
             rows,
             children,
             active,
+            latest,
             collapsed,
         }
     }
@@ -183,7 +213,12 @@ impl<'a> TreeView<'a> {
             return;
         }
         let mut sorted = children;
-        sorted.sort_by_key(|child| !self.active.contains(child));
+        sorted.sort_by(|left, right| {
+            self.active
+                .contains(right)
+                .cmp(&self.active.contains(left))
+                .then_with(|| self.latest.get(right).cmp(&self.latest.get(left)))
+        });
         for (position, child) in sorted.iter().enumerate() {
             let mut child_stems = stems.to_vec();
             child_stems.push(position + 1 < sorted.len());
@@ -292,19 +327,21 @@ impl ViewState {
 
 fn ui_loop(
     terminal: &mut ratatui::DefaultTerminal,
-    receiver: &mpsc::Receiver<(Vec<AgentRow>, usize)>,
+    receiver: &mpsc::Receiver<Observation>,
 ) -> io::Result<()> {
     let mut rows = Vec::new();
+    let mut activity = BTreeMap::new();
     let mut warnings = 0;
     let mut frame_index = 0;
     let mut state = ViewState::default();
     loop {
-        if let Ok((snapshot, diagnostics)) = receiver.try_recv() {
-            rows = snapshot;
+        if let Ok(snapshot) = receiver.try_recv() {
+            rows = snapshot.rows;
+            activity = snapshot.activity;
             state.remember(&rows);
-            warnings = diagnostics;
+            warnings = snapshot.warnings;
         }
-        let nodes = TreeView::new(&rows, &state.collapsed).flatten();
+        let nodes = TreeView::new(&rows, &state.collapsed, &activity).flatten();
         let selected = state.selected_index(&rows, &nodes);
         let mut body_height = 0;
         terminal.draw(|frame| {
@@ -392,7 +429,7 @@ fn render_rows(
         let fold = if index == 0 {
             ""
         } else if !node.children {
-            "  "
+            "─ "
         } else if node.collapsed {
             "▶ "
         } else {
@@ -409,7 +446,10 @@ fn render_rows(
                 format!("{icon} "),
                 Style::default().fg(if node.active { WORKING } else { GRAY }),
             ),
-            Span::styled(fold, Style::default().fg(GRAY)),
+            Span::styled(
+                fold,
+                Style::default().fg(if node.children { GRAY } else { LEAF }),
+            ),
             Span::raw(format!("{}{freshness_note}", row.name())),
         ];
         if index == 0 {
@@ -483,7 +523,7 @@ mod tests {
     fn working_descendants_sort_their_branch_first_and_animate_ancestors() {
         let rows = fixture();
         let collapsed = BTreeSet::new();
-        let nodes = TreeView::new(&rows, &collapsed).flatten();
+        let nodes = TreeView::new(&rows, &collapsed, &BTreeMap::new()).flatten();
         let names: Vec<_> = nodes.iter().map(|node| rows[node.source].name()).collect();
         assert_eq!(names, ["Main", "Worker-B", "Worker-C", "Worker-A"]);
         assert!(nodes[0].active && nodes[1].active && nodes[2].active);
@@ -495,14 +535,19 @@ mod tests {
     fn folding_keeps_active_branch_visible_and_keyboard_restores_children() {
         let rows = fixture();
         let mut state = ViewState::default();
-        let nodes = TreeView::new(&rows, &state.collapsed).flatten();
+        let nodes = TreeView::new(&rows, &state.collapsed, &BTreeMap::new()).flatten();
         state.key(KeyCode::Down, &rows, &nodes);
         state.key(KeyCode::Left, &rows, &nodes);
-        let nodes = TreeView::new(&rows, &state.collapsed).flatten();
+        let nodes = TreeView::new(&rows, &state.collapsed, &BTreeMap::new()).flatten();
         assert_eq!(nodes.len(), 3);
         assert!(nodes[1].active && nodes[1].collapsed);
         state.key(KeyCode::Right, &rows, &nodes);
-        assert_eq!(TreeView::new(&rows, &state.collapsed).flatten().len(), 4);
+        assert_eq!(
+            TreeView::new(&rows, &state.collapsed, &BTreeMap::new())
+                .flatten()
+                .len(),
+            4
+        );
     }
     #[test]
     fn scrolling_children_keeps_main_visible() {
@@ -511,7 +556,7 @@ mod tests {
             scroll: 2,
             ..ViewState::default()
         };
-        let nodes = TreeView::new(&rows, &state.collapsed).flatten();
+        let nodes = TreeView::new(&rows, &state.collapsed, &BTreeMap::new()).flatten();
         let text = render_rows(&rows, &nodes, &state, 0, 36)
             .into_iter()
             .map(|line| line.to_string())
@@ -526,7 +571,7 @@ mod tests {
     fn main_counter_is_right_aligned_and_only_active_count_uses_working_color() {
         let rows = fixture();
         let state = ViewState::default();
-        let nodes = TreeView::new(&rows, &state.collapsed).flatten();
+        let nodes = TreeView::new(&rows, &state.collapsed, &BTreeMap::new()).flatten();
         let lines = render_rows(&rows, &nodes, &state, 3, 36);
         assert_eq!(lines[0].width(), 36);
         assert!(lines[0].to_string().starts_with("⡇ Main"));
@@ -544,7 +589,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.to_string().contains("─⣿   Worker-A"))
+                .any(|line| line.to_string().contains("─⣿ ─ Worker-A"))
         );
     }
     #[test]
@@ -552,21 +597,63 @@ mod tests {
         let rows = fixture();
         let mut state = ViewState::default();
         state.remember(&rows);
-        let nodes = TreeView::new(&rows, &state.collapsed).flatten();
+        let nodes = TreeView::new(&rows, &state.collapsed, &BTreeMap::new()).flatten();
         assert_eq!(nodes.len(), 3);
         assert!(!nodes[0].collapsed);
         assert!(nodes[1].collapsed && nodes[1].active);
         state.key(KeyCode::Down, &rows, &nodes);
         state.key(KeyCode::Right, &rows, &nodes);
         state.remember(&rows);
-        assert_eq!(TreeView::new(&rows, &state.collapsed).flatten().len(), 4);
+        assert_eq!(
+            TreeView::new(&rows, &state.collapsed, &BTreeMap::new())
+                .flatten()
+                .len(),
+            4
+        );
     }
     #[test]
     fn inactive_main_has_no_left_padding() {
         let rows = AgentTree::new(ThreadId::new("root".into())).rows();
         let state = ViewState::default();
-        let nodes = TreeView::new(&rows, &state.collapsed).flatten();
+        let nodes = TreeView::new(&rows, &state.collapsed, &BTreeMap::new()).flatten();
         let lines = render_rows(&rows, &nodes, &state, 0, 36);
         assert!(lines[0].to_string().starts_with("⣿ Main"));
+    }
+    #[test]
+    fn sorts_working_first_then_last_activity_within_each_group() {
+        let mut tree = AgentTree::new(ThreadId::new("root".into()));
+        let mut activity = BTreeMap::new();
+        for (name, seconds, working) in [
+            ("old", 1, false),
+            ("recent", 4, false),
+            ("working-old", 2, true),
+            ("working-recent", 3, true),
+        ] {
+            let id = ThreadId::new(name.into());
+            tree.apply(AgentEvent::Discover {
+                thread: id.clone(),
+                parent: ThreadId::new("root".into()),
+                name: Some(name.into()),
+                assignment: None,
+            })
+            .unwrap();
+            if working {
+                tree.apply(AgentEvent::Lifecycle {
+                    thread: id.clone(),
+                    turn: "one".into(),
+                    status: Status::Working,
+                })
+                .unwrap();
+            }
+            activity.insert(id, SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
+        }
+        let rows = tree.rows();
+        let collapsed = BTreeSet::new();
+        let nodes = TreeView::new(&rows, &collapsed, &activity).flatten();
+        let names: Vec<_> = nodes.iter().map(|node| rows[node.source].name()).collect();
+        assert_eq!(
+            names,
+            ["Main", "working-recent", "working-old", "recent", "old"]
+        );
     }
 }

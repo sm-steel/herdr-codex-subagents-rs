@@ -71,3 +71,7 @@ Windows and Linux are required. Engineering rules are in [rust-rules.md](rust-ru
 
 Main starts expanded; nested subagent branches start collapsed. Expanding a branch
 keeps it expanded across updates. Hidden descendants still affect icons and counts.
+
+Sibling branches sort by working first, then most recent observed rollout update,
+including descendant activity. Equal activity times preserve their stable order.
+Expanders ▶ / ▼ appear before names; leaf marker ─ uses dim Mocha Surface1.

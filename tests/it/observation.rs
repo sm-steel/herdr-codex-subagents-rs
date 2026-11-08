@@ -288,3 +288,36 @@ fn discovery_advances_past_first_ten_thousand_files() {
     reader.discover().unwrap();
     assert_eq!(reader.poll()[0].thread().as_str(), "root");
 }
+
+#[test]
+fn last_activity_uses_observed_log_updates_and_refreshes_after_appends() {
+    use std::time::{Duration, SystemTime};
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("root.jsonl");
+    fs::write(&path, metadata("root", None) + &event("task_started", "r1")).unwrap();
+    let earlier = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+    let later = earlier + Duration::from_secs(60);
+    let file = OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_times(fs::FileTimes::new().set_modified(earlier))
+        .unwrap();
+    let mut reader = monitor(&dir);
+    reader.discover().unwrap();
+    let _ = reader.poll();
+    assert_eq!(
+        reader.activity_times().get(&ThreadId::new("root".into())),
+        Some(&earlier)
+    );
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(event("task_complete", "r1").as_bytes())
+        .unwrap();
+    file.set_times(fs::FileTimes::new().set_modified(later))
+        .unwrap();
+    let _ = reader.poll();
+    assert_eq!(
+        reader.activity_times().get(&ThreadId::new("root".into())),
+        Some(&later)
+    );
+}

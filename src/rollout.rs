@@ -103,6 +103,20 @@ impl Monitor {
         }
     }
 
+    /// Latest observed rollout update time per thread, used only for presentation sorting.
+    #[must_use]
+    pub fn activity_times(&self) -> BTreeMap<ThreadId, SystemTime> {
+        let mut times = BTreeMap::new();
+        for tail in self.files.values() {
+            if let Some(modified) = tail.modified {
+                times
+                    .entry(tail.thread.clone())
+                    .and_modify(|time: &mut SystemTime| *time = (*time).max(modified))
+                    .or_insert(modified);
+            }
+        }
+        times
+    }
     /// Discover new rollouts; call less often than `poll` for large histories.
     ///
     /// # Errors

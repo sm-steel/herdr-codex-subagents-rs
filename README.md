@@ -60,6 +60,9 @@ Main stays pinned first with a right-aligned `[working of total]` descendant cou
 Active branches sort first. The animated four-row Braille icon also marks parents
 with active descendants. Other rows show a gray `⣿`, with one space on each side.
 Tree connectors, selection, text and footer use Catppuccin Mocha colors.
+Main starts open; nested branches start folded. Working siblings sort first, then
+newest observed rollout activity, including descendants. ▶ / ▼ sit before names;
+non-collapsible rows use a dim ─ in Mocha Surface1. Icons have no leading gap.
 
 Up/down selects, left/right collapses/expands or follows parent/child, and
 Enter/Space or a mouse click toggles a branch. `q` or Ctrl-C exits only the monitor.
@@ -102,6 +105,3 @@ maintainer review before implementation; see [Rust rules](docs/rust-rules.md).
 - [Navigation PoC](poc/RESULTS.md)
 
 MIT OR Apache-2.0. Independent project, not affiliated with OpenAI or Herdr.
-
-Main starts expanded; nested subagent branches start collapsed. Expanding a branch
-keeps it expanded across updates. Hidden descendants still affect icons and counts.
