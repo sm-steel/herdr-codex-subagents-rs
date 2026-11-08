@@ -389,12 +389,14 @@ fn render_rows(
         } else {
             ""
         };
-        let fold = if !node.children || index == 0 {
+        let fold = if index == 0 {
             ""
+        } else if !node.children {
+            "  "
         } else if node.collapsed {
-            " ▸"
+            "▶ "
         } else {
-            " ▾"
+            "▼ "
         };
         let branch = if node.branch.is_empty() {
             node.branch.clone()
@@ -407,7 +409,8 @@ fn render_rows(
                 format!("{icon} "),
                 Style::default().fg(if node.active { WORKING } else { GRAY }),
             ),
-            Span::raw(format!("{}{fold}{freshness_note}", row.name())),
+            Span::styled(fold, Style::default().fg(GRAY)),
+            Span::raw(format!("{}{freshness_note}", row.name())),
         ];
         if index == 0 {
             append_counts(&mut spans, rows, width);
@@ -541,7 +544,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.to_string().contains("─⣿ Worker-A"))
+                .any(|line| line.to_string().contains("─⣿   Worker-A"))
         );
     }
     #[test]
