@@ -296,7 +296,7 @@ fn last_activity_uses_observed_log_updates_and_refreshes_after_appends() {
     let path = dir.path().join("root.jsonl");
     fs::write(&path, metadata("root", None) + &event("task_started", "r1")).unwrap();
     let earlier = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
-    let later = earlier + Duration::from_secs(60);
+    let later = earlier + Duration::from_mins(1);
     let file = OpenOptions::new().write(true).open(&path).unwrap();
     file.set_times(fs::FileTimes::new().set_modified(earlier))
         .unwrap();
