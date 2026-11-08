@@ -1,0 +1,46 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        toolchain: ["1.99.0", "1.97.0"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install toolchain
+        shell: bash
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        run: rustup toolchain install "$TOOLCHAIN" --profile minimal --component clippy --component rustfmt
+      - name: Build and test
+        shell: bash
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        run: |
+          cargo +"$TOOLCHAIN" test --locked
+          cargo +"$TOOLCHAIN" clippy --locked --all-targets -- -D warnings
+      - name: Format
+        if: matrix.toolchain == '1.99.0'
+        run: cargo fmt --check
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install dependency auditor
+        run: cargo install cargo-deny --version 0.20.2 --locked
+      - name: Audit dependencies
+        run: cargo deny check

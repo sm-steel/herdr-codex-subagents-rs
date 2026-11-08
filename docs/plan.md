@@ -17,6 +17,13 @@ versions during foundation; no product Cargo project exists yet.
 
 **Spec:** [design.md](design.md). Rules: [rust-rules.md](rust-rules.md).
 
+## Execution scope update
+
+Monitoring-only preview is authorized. Task 4 and click navigation are deferred.
+The Rust core, incremental observation, CLI, Herdr manifest, panel and CI are
+implemented on feat/panel. See compatibility.md for tested environments and known
+gaps. Windows/Linux CI, independent review and final smoke checks decide readiness.
+
 ## Global constraints
 
 - Windows and Linux required; Herdr 0.9.5 / Codex 0.166.0 initial baseline.

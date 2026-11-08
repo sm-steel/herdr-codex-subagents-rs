@@ -268,7 +268,11 @@ impl AgentTree {
                     node.row.freshness = freshness;
                 }
             }
-            Event::Assignment { .. } => {}
+            Event::Assignment { thread, text } => {
+                if let Some(node) = self.ensure(&thread) {
+                    node.row.assignment = Some(bounded_text(&text));
+                }
+            }
         }
         Ok(())
     }

@@ -7,3 +7,8 @@ pub mod agent;
 pub mod record_buffer;
 
 pub mod text;
+
+pub mod rollout;
+
+pub mod herdr;
+pub mod panel;

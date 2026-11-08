@@ -2,8 +2,85 @@
 
 /// Remove control sequences and bound UTF-8 display text.
 #[must_use]
-pub fn display_text(_input: &str, _max_bytes: usize) -> String {
-    String::new()
+pub fn display_text(input: &str, max_bytes: usize) -> String {
+    let mut output = String::new();
+    let mut state = EscapeState::Text;
+    let mut whitespace = false;
+    for ch in input.chars() {
+        match state {
+            EscapeState::Escape => {
+                state = match ch {
+                    '[' => EscapeState::Csi,
+                    ']' | 'P' | '^' | '_' => EscapeState::String,
+                    _ => EscapeState::Text,
+                };
+                continue;
+            }
+            EscapeState::Csi => {
+                if ('\u{40}'..='\u{7e}').contains(&ch) {
+                    state = EscapeState::Text;
+                }
+                continue;
+            }
+            EscapeState::String => {
+                if ch == '\u{7}' || ch == '\u{9c}' {
+                    state = EscapeState::Text;
+                } else if ch == '\u{1b}' {
+                    state = EscapeState::StringEscape;
+                }
+                continue;
+            }
+            EscapeState::StringEscape => {
+                state = if ch == '\\' {
+                    EscapeState::Text
+                } else {
+                    EscapeState::String
+                };
+                continue;
+            }
+            EscapeState::Text => {}
+        }
+        match ch {
+            '\u{1b}' => {
+                state = EscapeState::Escape;
+                continue;
+            }
+            '\u{9b}' => {
+                state = EscapeState::Csi;
+                continue;
+            }
+            '\u{9d}' | '\u{90}' | '\u{9e}' | '\u{9f}' => {
+                state = EscapeState::String;
+                continue;
+            }
+            _ => {}
+        }
+        if ch.is_whitespace() {
+            whitespace = !output.is_empty();
+            continue;
+        }
+        if ch.is_control() {
+            continue;
+        }
+        let space_bytes = usize::from(whitespace);
+        if output.len() + space_bytes + ch.len_utf8() > max_bytes {
+            break;
+        }
+        if whitespace {
+            output.push(' ');
+            whitespace = false;
+        }
+        output.push(ch);
+    }
+    output
+}
+
+enum EscapeState {
+    Text,
+    Escape,
+    Csi,
+    String,
+    StringEscape,
 }
 
 #[cfg(test)]

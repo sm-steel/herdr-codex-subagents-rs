@@ -1,5 +1,11 @@
 # Design: one panel, existing Codex pane
 
+## Current implementation scope
+
+The first version is monitoring only. Thread switching is disabled until safe
+atomic control is established. The navigation sections below describe deferred
+work; they are not acceptance requirements for the monitoring preview.
+
 ## Intent and status
 
 Make delegated work visible while preserving the official Codex TUI. Windows

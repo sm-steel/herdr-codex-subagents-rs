@@ -1,0 +1,21 @@
+id = "sm-steel.codex-subagents"
+name = "Codex Subagents"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Read-only Codex main and subagent status panel"
+platforms = ["windows", "linux"]
+
+[[build]]
+command = ["cargo", "build", "--release", "--locked"]
+
+[[actions]]
+id = "open"
+title = "Show Codex subagents"
+contexts = ["pane"]
+command = ["target/release/herdr-codex-subagents-rs", "open"]
+
+[[panes]]
+id = "monitor"
+title = "Codex agents"
+placement = "split"
+command = ["target/release/herdr-codex-subagents-rs", "watch"]
