@@ -19,7 +19,7 @@ run = ["cargo fmt --check", "uvx --from ruff==0.17.4 ruff format --check scripts
 
 [tasks.lint]
 description = "Lint Rust and Python and type-check release helpers"
-depends = ["lint:rust", "lint:python", "typecheck"]
+depends = ["lint:rust", "lint:python", "lint:workflows", "lint:typos", "lint:secrets", "lint:commits", "typecheck"]
 
 [tasks."lint:rust"]
 description = "Run strict Rust Clippy"
@@ -97,3 +97,25 @@ run = "herdr plugin action invoke sm-steel.codex-subagents.setup"
 [tasks."plugin:sync"]
 description = "Attach monitors to known Codex sessions"
 run = "herdr plugin action invoke sm-steel.codex-subagents.sync"
+[tasks."test:nextest"]
+description = "Run Rust tests with nextest"
+run = "cargo nextest run --locked"
+
+[tasks."lint:workflows"]
+description = "Validate and audit GitHub workflows"
+run = ["actionlint", "zizmor --offline .github/workflows"]
+
+[tasks."lint:typos"]
+description = "Check spelling in tracked project sources"
+run = "typos"
+
+[tasks."lint:secrets"]
+description = "Scan committed history for secrets"
+run = "gitleaks git --redact --no-banner --log-opts=--all ."
+
+[tasks."hooks:install"]
+description = "Install this checkout's local Git hooks"
+run = "lefthook install"
+[tasks."lint:commits"]
+description = "Check Conventional Commits with Cocogitto"
+run = "cog check"

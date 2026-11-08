@@ -73,3 +73,8 @@ For local Herdr development, use `mise run plugin:link`, then `plugin:setup` and
 `plugin:sync`. These explicit tasks affect your Herdr installation; tests use fakes.
 Python helper formatting, lint and type checks run through `mise run fmt`, `lint` and
 `typecheck`. `mise run check` includes all test suites and the dependency audit.
+
+Run `mise tasks ls` to list every command. Optional `test:nextest` uses the
+pinned nextest runner, `lint:workflows` audits workflow files, `lint:typos` checks
+spelling, `lint:secrets` scans committed history, and `lint:commits` runs Cocogitto.
+`hooks:install` explicitly installs the checkout's local Git hooks.

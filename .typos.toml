@@ -1,0 +1,3 @@
+# Ratatui is the terminal UI crate's name.
+[default.extend-words]
+Ratatui = "Ratatui"

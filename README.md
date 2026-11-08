@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sm-steel/herdr-codex-subagents-rs/actions/workflows/ci.yml"><img src="https://github.com/sm-steel/herdr-codex-subagents-rs/actions/workflows/ci.yml/badge.svg?branch=feat%2Fpanel" alt="Checks"></a>
+  <a href="https://github.com/sm-steel/herdr-codex-subagents-rs/actions/workflows/ci.yml"><img src="https://github.com/sm-steel/herdr-codex-subagents-rs/actions/workflows/ci.yml/badge.svg?branch=main" alt="Checks"></a>
   <a href="https://github.com/sm-steel/herdr-codex-subagents-rs/actions/workflows/release.yml"><img src="https://img.shields.io/badge/Windows%20%7C%20Linux-89b4fa?label=platforms" alt="Windows and Linux"></a>
   <br>
   📖 <a href="docs/usage.md">Guide</a> ·
