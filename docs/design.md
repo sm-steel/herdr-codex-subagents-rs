@@ -11,8 +11,8 @@ to the right. N counts descendants whose own recorded status is working; X count
 all known descendants, including folded ones. An active N uses the same Mocha blue
 as the animated icon. There is no separate header or outer tree border.
 
-Every icon precedes its name. Inactive icons have one space on either side;
-animated icons have no leading gap and connect directly to the tree. Working branches use
+Every icon precedes its name with one following space, no leading margin, and
+no gap between its tree connector and icon. Working branches use
 all four Braille rows: `⡀ ⡄ ⡆ ⡇ ⣇ ⣧ ⣷ ⣿ ⢿ ⢻ ⢹ ⢸ ⠸ ⠘ ⠈ ⠀`. A branch animates if
 its own turn or any descendant is working. Other branches use a static gray `⣿`.
 The reducer and JSON observation retain distinct own lifecycle states; the UI

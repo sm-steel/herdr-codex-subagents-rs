@@ -370,11 +370,6 @@ fn render_rows(
     width: u16,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let margin = if nodes.first().is_some_and(|node| node.active) {
-        ""
-    } else {
-        " "
-    };
     for (index, node) in nodes
         .iter()
         .enumerate()
@@ -401,13 +396,13 @@ fn render_rows(
         } else {
             " ▾"
         };
-        let branch = if node.active && !node.branch.is_empty() {
-            format!("{}─", node.branch.trim_end())
-        } else {
+        let branch = if node.branch.is_empty() {
             node.branch.clone()
+        } else {
+            format!("{}─", node.branch.trim_end())
         };
         let mut spans = vec![
-            Span::styled(format!("{margin}{branch}"), Style::default().fg(GRAY)),
+            Span::styled(branch, Style::default().fg(GRAY)),
             Span::styled(
                 format!("{icon} "),
                 Style::default().fg(if node.active { WORKING } else { GRAY }),
@@ -424,16 +419,13 @@ fn render_rows(
         lines.push(heading);
         for (label, text) in [("Task", row.assignment()), ("Last", row.activity())] {
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{margin}{}", node.continuation),
-                    Style::default().fg(GRAY),
-                ),
+                Span::styled(node.continuation.clone(), Style::default().fg(GRAY)),
                 Span::styled(format!("  {label}: "), Style::default().fg(SUBTEXT)),
                 Span::raw(text.unwrap_or("unavailable").to_owned()),
             ]));
         }
         lines.push(Line::from(Span::styled(
-            format!("{margin}{}", node.continuation),
+            node.continuation.clone(),
             Style::default().fg(GRAY),
         )));
     }
@@ -549,7 +541,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.to_string().contains(" ⣿ Worker-A"))
+                .any(|line| line.to_string().contains("─⣿ Worker-A"))
         );
     }
     #[test]
@@ -565,5 +557,13 @@ mod tests {
         state.key(KeyCode::Right, &rows, &nodes);
         state.remember(&rows);
         assert_eq!(TreeView::new(&rows, &state.collapsed).flatten().len(), 4);
+    }
+    #[test]
+    fn inactive_main_has_no_left_padding() {
+        let rows = AgentTree::new(ThreadId::new("root".into())).rows();
+        let state = ViewState::default();
+        let nodes = TreeView::new(&rows, &state.collapsed).flatten();
+        let lines = render_rows(&rows, &nodes, &state, 0, 36);
+        assert!(lines[0].to_string().starts_with("⣿ Main"));
     }
 }
